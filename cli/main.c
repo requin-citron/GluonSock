@@ -51,69 +51,150 @@ INT main(INT argc, PCHAR* argv) {
 
     _inf("SOCKS server listening on port %d", SOCKS_PORT);
 
+    // Set listen socket to non-blocking
+    u_long mode = 1;
+    ioctlsocket(listen_sock, FIONBIO, &mode);
+
     // Main server loop
     while (TRUE) {
-        struct sockaddr_in client_addr;
-        int client_len = sizeof(client_addr);
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(listen_sock, &read_fds);
 
-        SOCKET client_sock = accept(listen_sock, (struct sockaddr*)&client_addr, &client_len);
-        if (client_sock == INVALID_SOCKET) {
-            _err("Accept failed: %d", WSAGetLastError());
+        struct timeval timeout;
+        timeout.tv_sec = 1;
+        timeout.tv_usec = 0;
+
+        int select_result = select(0, &read_fds, NULL, NULL, &timeout);
+
+        if (select_result == SOCKET_ERROR) {
+            _err("Select failed: %d", WSAGetLastError());
+            break;
+        }
+
+        if (select_result == 0) {
+            // Timeout, continue loop
             continue;
         }
 
-        _inf("Client connected from %s:%d",
-             inet_ntoa(client_addr.sin_addr),
-             ntohs(client_addr.sin_port));
+        // Check if we have a new connection
+        if (FD_ISSET(listen_sock, &read_fds)) {
+            struct sockaddr_in client_addr;
+            int client_len = sizeof(client_addr);
 
-        // Handle client connection
-        BYTE buffer[BUFFER_SIZE];
-        UINT32 server_id = (UINT32)client_sock; // Use socket as unique ID
-
-        while (TRUE) {
-            int recv_len = recv(client_sock, (char*)buffer, BUFFER_SIZE, 0);
-
-            if (recv_len <= 0) {
-                if (recv_len == 0) {
-                    _inf("Client disconnected");
-                } else {
-                    _err("Recv failed: %d", WSAGetLastError());
+            SOCKET client_sock = accept(listen_sock, (struct sockaddr*)&client_addr, &client_len);
+            if (client_sock == INVALID_SOCKET) {
+                int err = WSAGetLastError();
+                if (err != WSAEWOULDBLOCK) {
+                    _err("Accept failed: %d", err);
                 }
-                break;
+                continue;
             }
 
-            _inf("Received %d bytes from client", recv_len);
+            // Set client socket to non-blocking
+            u_long client_mode = 1;
+            ioctlsocket(client_sock, FIONBIO, &client_mode);
 
-            // Process SOCKS data
-            PBYTE response      = NULL;
-            UINT32 response_len = 0;
+            _inf("Client connected from %s:%d",
+                 inet_ntoa(client_addr.sin_addr),
+                 ntohs(client_addr.sin_port));
 
-            BOOL ret_parse = socks_parse_data(context, server_id, buffer, recv_len, &response, &response_len);
-            _inf("socks_parse_data returned: %s", ret_parse ? "TRUE" : "FALSE");
+            // Handle client connection
+            BYTE buffer[BUFFER_SIZE];
+            UINT32 server_id = (UINT32)client_sock; // Use socket as unique ID
 
-            // Send response if any
-            if (response && response_len > 0) {
-                int sent = send(client_sock, (char*)response, response_len, 0);
-                if (sent == SOCKET_ERROR) {
-                    _err("Send failed: %d", WSAGetLastError());
-                    free(response);
+            while (TRUE) {
+                // Get remote socket if connection exists
+                PGLUON_SOCKS_CONN conn = socks_find_connection(context, server_id);
+                SOCKET remote_sock = (conn != NULL) ? conn->socket : INVALID_SOCKET;
+
+                fd_set client_read_fds;
+                FD_ZERO(&client_read_fds);
+                FD_SET(client_sock, &client_read_fds);
+
+                // Also monitor remote socket if it exists
+                if (remote_sock != INVALID_SOCKET) {
+                    FD_SET(remote_sock, &client_read_fds);
+                }
+
+                struct timeval client_timeout;
+                client_timeout.tv_sec = 5;
+                client_timeout.tv_usec = 0;
+
+                int client_select = select(0, &client_read_fds, NULL, NULL, &client_timeout);
+
+                if (client_select == SOCKET_ERROR) {
+                    _err("Client select failed: %d", WSAGetLastError());
                     break;
                 }
-                _inf("Sent %d bytes to client", sent);
-                free(response);
+
+                if (client_select == 0) {
+                    // Timeout, continue to check if connection is still alive
+                    continue;
+                }
+
+                // Check client socket
+                if (FD_ISSET(client_sock, &client_read_fds)) {
+                    _inf("Data available from client, attempting to recv");
+                    int recv_len = recv(client_sock, (char*)buffer, BUFFER_SIZE, 0);
+
+                    if (recv_len <= 0) {
+                        if (recv_len == 0) {
+                            _inf("Client disconnected");
+                        } else {
+                            int err = WSAGetLastError();
+                            if (err != WSAEWOULDBLOCK) {
+                                _err("Recv failed: %d", err);
+                            }
+                        }
+                        break;
+                    }
+
+                    _inf("Received %d bytes from client", recv_len);
+
+                    // Process SOCKS data
+                    PBYTE response      = NULL;
+                    UINT32 response_len = 0;
+
+                    BOOL ret_parse = socks_parse_data(context, server_id, buffer, recv_len, &response, &response_len);
+                    _inf("socks_parse_data returned: %s", ret_parse ? "TRUE" : "FALSE");
+
+                    // Send response if any
+                    if (response && response_len > 0) {
+                        int sent = send(client_sock, (char*)response, response_len, 0);
+                        if (sent == SOCKET_ERROR) {
+                            _err("Send failed: %d", WSAGetLastError());
+                            free(response);
+                            break;
+                        }
+                        _inf("Sent %d bytes to client", sent);
+                        free(response);
+                    }
+                }
+
+                // Check remote socket for data
+                if (remote_sock != INVALID_SOCKET && FD_ISSET(remote_sock, &client_read_fds)) {
+                    _inf("Data available from remote server");
+                    PCHAR data_out      = NULL;
+                    UINT32 data_out_len = 0;
+
+                    socks_recv_data(context, server_id, (PBYTE*)&data_out, &data_out_len);
+                    if (data_out_len > 0) {
+                        _inf("Received %d bytes from remote server, forwarding to client", data_out_len);
+                        int sent = send(client_sock, (char*)data_out, data_out_len, 0);
+                        if (sent == SOCKET_ERROR) {
+                            _err("Failed to send remote data to client: %d", WSAGetLastError());
+                            free(data_out);
+                            break;
+                        }
+                        free(data_out);
+                    }
+                }
             }
-            
-            PCHAR data_out      = NULL;
-            UINT32 data_out_len = 0;
 
-            socks_recv_data(context, server_id, (PBYTE*)&data_out, &data_out_len);
-            _inf("socks_recv_data returned data_out_len: %u", data_out_len);
-            send(client_sock, (char*)data_out, data_out_len, 0);
-        
+            closesocket(client_sock);
+            _inf("Client socket closed");
         }
-
-        closesocket(client_sock);
-        _inf("Client socket closed");
     }
 
     closesocket(listen_sock);
