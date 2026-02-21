@@ -24,7 +24,7 @@ static BOOL init_winsock(VOID) {
 
 static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len){
     BYTE atyp        = data[3];
-    PBYTE ret        = malloc(10); // Allocate failure response buffer
+    PBYTE ret        = mcalloc(10); // Allocate failure response buffer
     UINT16 target_port;
     CHAR  target_ip[4]; // IPv4 address is 4 bytes 
     
@@ -41,7 +41,7 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
             }
 
             API(RtlCopyMemory)(target_ip, &data[4], 4); // IPv4 address starts at byte 4
-            API(RtlCopyMemory)(&target_port, &data[8], 2); // Port starts at byte 8
+            API(RtlCopyMemory)(&target_port, &data[8], 2); // Port starts at byte 8 (already in network byte order)
 
             break;
         case 0x03: // Domain
@@ -83,7 +83,7 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
             API(RtlCopyMemory)(target_ip, host->h_addr_list[0], 4);
 
             mcfree(domain_name); // Free domain name after use
-            API(RtlCopyMemory)(&target_port, data + 5 + domain_len, 2);  // Port is after domain name
+            API(RtlCopyMemory)(&target_port, data + 5 + domain_len, 2);  // Port is after domain name (already in network byte order)
 
 
             break;
@@ -103,7 +103,7 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
 
     // Create connection to target
     if(!socks_create_conn(ctx, server_id, target_ip, target_port)) {
-        _err("Failed to create connection to target %s:%d", target_ip, target_port);
+        _err("Failed to create connection to target %u.%u.%u.%u:%d", (UINT8)target_ip[0], (UINT8)target_ip[1], (UINT8)target_ip[2], (UINT8)target_ip[3], API(ntohs)(target_port));
         // general failure response
         API(RtlMoveMemory)(ret, "\x05\x01\x00\x01\x00\x00\x00\x00\x00\x00", 10);
 
@@ -199,7 +199,7 @@ BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip,
     API(RtlZeroMemory)(&server_addr, sizeof(server_addr));
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port   = API(htons)(target_port);
+    server_addr.sin_port   = target_port;
 
     API(RtlMoveMemory)(&server_addr.sin_addr, target_ip, 4); // Copy resolved IP to sockaddr_in
 
@@ -227,7 +227,7 @@ BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip,
         timeout.tv_usec = 0;
 
         if (API(select)(0, NULL, &write_fds, &except_fds, &timeout) <= 0) {
-            _err("Connection timeout or failed for %s:%d", target_ip, target_port);
+            _err("Connection timeout or failed for %u.%u.%u.%u:%d", (UINT8)target_ip[0], (UINT8)target_ip[1], (UINT8)target_ip[2], (UINT8)target_ip[3], API(ntohs)(target_port));
             API(closesocket)(sock);
             return FALSE;
         }
@@ -250,7 +250,9 @@ BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip,
     ctx->connections = conn;
     ctx->connection_count++; // Increment connection count
 
-    _inf("Connected to %s:%d with Server ID: %u", target_ip, target_port, server_id);
+    _inf("Connected to %d.%d.%d.%d:%d with Server ID: %u",
+         (unsigned char)target_ip[0], (unsigned char)target_ip[1],
+         (unsigned char)target_ip[2], (unsigned char)target_ip[3], API(ntohs)(target_port), server_id);
 
     return TRUE;
 }
@@ -349,6 +351,60 @@ BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT3
         }
     }
 
+    return TRUE;
+}
+
+BOOL socks_recv_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE *data_out, UINT32 *data_out_len) {
+    PGLUON_SOCKS_CONN conn = socks_find_connection(ctx, server_id);
+    
+    if (conn == NULL) {
+        _err("No connection found for Server ID: %u", server_id);
+        return FALSE;
+    }
+
+    BOOL closed   = FALSE;
+    BOOL errored  = FALSE;
+    UINT32 total  = 0;
+    PBYTE buffer  = mcalloc(GS_SOCKS_BUFFER_SIZE);
+
+    while(total < GS_SOCKS_BUFFER_SIZE) {
+        INT recv_len  = API(recv)(conn->socket, (PCHAR)(buffer + total), GS_SOCKS_BUFFER_SIZE - total, 0);
+        
+        if(recv_len > 0){
+            total += recv_len;
+            continue; // Keep reading until buffer is full or no more data
+        } else if(recv_len == 0) {
+            closed = TRUE;
+            break;
+        } 
+        
+        if(API(WSAGetLastError)() != WSAEWOULDBLOCK) {
+            errored = TRUE;
+        }
+        break; // No more data to read
+    }
+    
+    // Initialize output parameters to default in case of error/closure
+    *data_out     = NULL;
+    *data_out_len = 0;
+
+    if( errored || closed ) {
+        // Connection broken, remove and notify
+        socks_remove(ctx, server_id);
+        mcfree(buffer);
+        return FALSE;
+    }
+
+    if (total > 0) {
+        _inf("Received %u bytes from socket (server_id=%u)", total, server_id);
+        *data_out     = buffer;
+        *data_out_len = total;
+        
+        return TRUE;
+    }
+
+    mcfree(buffer);
+    return TRUE;
 }
 
 // PGLUON_SOCKS_CONN connection_list_create(){
