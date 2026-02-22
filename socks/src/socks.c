@@ -232,18 +232,31 @@ BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip,
 
         // Wait for connection with timeout
         fd_set write_fds;
-        fd_set except_fds;
-        FD_ZERO(&except_fds);
         FD_ZERO(&write_fds);
-        FD_SET(sock, &except_fds);
         FD_SET(sock, &write_fds);
 
         struct timeval timeout;
         timeout.tv_sec = GS_SOCKS_CONNECT_TIMEOUT;
         timeout.tv_usec = 0;
 
-        if (API(select)(0, NULL, &write_fds, &except_fds, &timeout) <= 0) {
-            _err("Connection timeout or failed for %u.%u.%u.%u:%d", (UINT8)target_ip[0], (UINT8)target_ip[1], (UINT8)target_ip[2], (UINT8)target_ip[3], API(ntohs)(target_port));
+        INT select_result = API(select)(0, NULL, &write_fds, NULL, &timeout);
+        if (select_result <= 0) {
+            _err("Connection timeout or select failed for %u.%u.%u.%u:%d", (UINT8)target_ip[0], (UINT8)target_ip[1], (UINT8)target_ip[2], (UINT8)target_ip[3], API(ntohs)(target_port));
+            API(closesocket)(sock);
+            return FALSE;
+        }
+
+        // Verify connection actually succeeded using SO_ERROR
+        INT sock_error = 0;
+        INT error_len = sizeof(sock_error);
+        if (API(getsockopt)(sock, SOL_SOCKET, SO_ERROR, (PCHAR)&sock_error, &error_len) != 0) {
+            _err("getsockopt failed: %d", API(WSAGetLastError)());
+            API(closesocket)(sock);
+            return FALSE;
+        }
+
+        if (sock_error != 0) {
+            _err("Connection failed for %u.%u.%u.%u:%d - error: %d", (UINT8)target_ip[0], (UINT8)target_ip[1], (UINT8)target_ip[2], (UINT8)target_ip[3], API(ntohs)(target_port), sock_error);
             API(closesocket)(sock);
             return FALSE;
         }
