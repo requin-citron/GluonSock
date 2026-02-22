@@ -25,7 +25,7 @@ static BOOL init_winsock(VOID) {
 static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len){
     BYTE atyp        = data[3];
     PBYTE ret        = (PBYTE)mcalloc(10); // Allocate failure response buffer
-    BOOL ret_val     = FALSE; // Default to failure, set to TRUE on success
+    BOOL ret_val     = TRUE; // Default to failure, set to TRUE on success
     UINT16 target_port;
     CHAR  target_ip[4]; // IPv4 address is 4 bytes 
     
@@ -125,7 +125,6 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
 
     // Success response
     API(RtlMoveMemory)(ret, "\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00", 10);
-    ret_val = TRUE;
 
     exit:
     ;
@@ -327,12 +326,12 @@ BOOL socks_open_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32
 
     PBYTE ret = (PBYTE)mcalloc(10); // Allocate response buffer
 
-    API(RtlMoveMemory)(ret, "\x05\x01\x00\x01\x00\x00\x00\x00\x00\x00", 10);
+    API(RtlMoveMemory)(ret, "\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00", 10);
 
     *data_out     = ret;
     *data_out_len = 10;
 
-    return FALSE;
+    return TRUE;
 }
 
 BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len) {
@@ -365,6 +364,9 @@ BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT3
                 return socks_open_conn(ctx, server_id, data, data_len, data_out, data_out_len);
             }
         }
+
+        _err("Invalid initial SOCKS5 packet");
+        return FALSE;
 
     }else{ // Connection exists - forward data to target socket
 

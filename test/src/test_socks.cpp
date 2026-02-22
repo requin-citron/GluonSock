@@ -840,8 +840,11 @@ TEST_F(SocksTest, RecvData_Success) {
     ctx->connections = test_conn;
     ctx->connection_count = 1;
 
-    // Mock recv to return data
-    recv_fake.return_val = 10;
+    // Mock recv: first call returns 10 bytes, second returns SOCKET_ERROR with WOULDBLOCK
+    static INT recv_seq[] = {10, SOCKET_ERROR};
+    recv_fake.return_val_seq = recv_seq;
+    recv_fake.return_val_seq_len = 2;
+    WSAGetLastError_fake.custom_fake = WSAGetLastError_would_block;
 
     PBYTE data = NULL;
     UINT32 data_len = 0;
@@ -849,8 +852,9 @@ TEST_F(SocksTest, RecvData_Success) {
     BOOL result = socks_recv_data(ctx, 30, &data, &data_len);
 
     EXPECT_TRUE(result);
-    EXPECT_EQ(recv_fake.call_count, 1u);
+    EXPECT_EQ(recv_fake.call_count, 2u); // Called twice: 10 bytes then WOULDBLOCK
     EXPECT_EQ(recv_fake.arg0_val, 456);
+    EXPECT_EQ(data_len, 10u); // Should have received 10 bytes
 
     if (data) {
         mcfree(data);
