@@ -378,8 +378,10 @@ BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT3
                         socks_remove(ctx, server_id); // Remove connection on send failure
                         return FALSE;
                     }
+                    API(Sleep)(100); // Wait before retrying if socket is not ready
+                }else{
+                    total_sent += sent;
                 }
-                total_sent += sent;
             }
         }
     }
