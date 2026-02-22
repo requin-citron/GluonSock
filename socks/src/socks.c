@@ -24,7 +24,7 @@ static BOOL init_winsock(VOID) {
 
 static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len){
     BYTE atyp        = data[3];
-    PBYTE ret        = mcalloc(10); // Allocate failure response buffer
+    PBYTE ret        = (PBYTE)mcalloc(10); // Allocate failure response buffer
     BOOL ret_val     = FALSE; // Default to failure, set to TRUE on success
     UINT16 target_port;
     CHAR  target_ip[4]; // IPv4 address is 4 bytes 
@@ -45,7 +45,7 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
             API(RtlCopyMemory)(&target_port, &data[8], 2); // Port starts at byte 8 (already in network byte order)
 
             break;
-        case 0x03: // Domain
+        case 0x03: {// Domain
             // len check for domain length 1byte len + N bytes domain + 2 bytes port
             if(data_len < 5) {
                 _err("SOCKS5 request too short for domain");
@@ -65,7 +65,7 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
                 goto exit;
             }
 
-            PCHAR domain_name = mcalloc(domain_len + 1);
+            PCHAR domain_name = (PCHAR)mcalloc(domain_len + 1);
             API(RtlCopyMemory)(domain_name, &data[5], domain_len);
             domain_name[domain_len] = '\0';
 
@@ -99,6 +99,7 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
 
 
             break;
+        }
         case 0x04: // IPv6
             _err("IPv6 not supported");
             // address type not supported response
@@ -140,7 +141,7 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
 
 // Initialize the SOCKS context
 PGS_SOCKS_CONTEXT socks_init() {
-    PGS_SOCKS_CONTEXT context = mcalloc(sizeof(GS_SOCKS_CONTEXT));
+    PGS_SOCKS_CONTEXT context = (PGS_SOCKS_CONTEXT)mcalloc(sizeof(GS_SOCKS_CONTEXT));
 
     // Initialize the CTX
     context->connections = NULL;
@@ -400,7 +401,7 @@ BOOL socks_recv_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE *data_out, U
     BOOL closed   = FALSE;
     BOOL errored  = FALSE;
     UINT32 total  = 0;
-    PBYTE buffer  = mcalloc(GS_SOCKS_BUFFER_SIZE);
+    PBYTE buffer  = (PBYTE)mcalloc(GS_SOCKS_BUFFER_SIZE);
 
     while(total < GS_SOCKS_BUFFER_SIZE) {
         INT recv_len  = API(recv)(conn->socket, (PCHAR)(buffer + total), GS_SOCKS_BUFFER_SIZE - total, 0);
