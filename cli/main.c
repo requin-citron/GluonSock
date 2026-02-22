@@ -2,6 +2,7 @@
 #include <winsock2.h>
 #include "debug.h"
 #include "socks.h"
+#include "utils.h"
 
 #define SOCKS_PORT 7000
 #define BUFFER_SIZE 4096
@@ -164,11 +165,11 @@ INT main(INT argc, PCHAR* argv) {
                         int sent = send(client_sock, (char*)response, response_len, 0);
                         if (sent == SOCKET_ERROR) {
                             _err("Send failed: %d", WSAGetLastError());
-                            free(response);
+                            mcfree(response);
                             break;
                         }
                         _inf("Sent %d bytes to client", sent);
-                        free(response);
+                        mcfree(response);
                     }
                 }
 
@@ -184,10 +185,10 @@ INT main(INT argc, PCHAR* argv) {
                         int sent = send(client_sock, (char*)data_out, data_out_len, 0);
                         if (sent == SOCKET_ERROR) {
                             _err("Failed to send remote data to client: %d", WSAGetLastError());
-                            free(data_out);
+                            mcfree(data_out);
                             break;
                         }
-                        free(data_out);
+                        mcfree(data_out);
                     }
                 }
             }

@@ -25,6 +25,7 @@ static BOOL init_winsock(VOID) {
 static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len){
     BYTE atyp        = data[3];
     PBYTE ret        = mcalloc(10); // Allocate failure response buffer
+    BOOL ret_val     = FALSE; // Default to failure, set to TRUE on success
     UINT16 target_port;
     CHAR  target_ip[4]; // IPv4 address is 4 bytes 
     
@@ -68,21 +69,32 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
             API(RtlCopyMemory)(domain_name, &data[5], domain_len);
             domain_name[domain_len] = '\0';
 
-            struct hostent* host = API(gethostbyname)(domain_name);
-            if (host == NULL) {
+            struct addrinfo hints, *result = NULL;
+            API(RtlZeroMemory)(&hints, sizeof(hints));
+            
+            hints.ai_family   = AF_INET; // IPv4 only for now
+            hints.ai_socktype = SOCK_STREAM;
+
+            INT res = API(getaddrinfo)(domain_name, NULL, &hints, &result);
+            
+            if (res != 0 || result == NULL) {
                 // Host resolution failed
                 _err("SOCKS failed to resolve domain: %s", domain_name);
                 
                 // general failure response
                 API(RtlMoveMemory)(ret, "\x05\x01\x00\x01\x00\x00\x00\x00\x00\x00", 10);
                 mcfree(domain_name);
+                if (result) API(freeaddrinfo)(result);
                 
                 goto exit;
             }
 
-            API(RtlCopyMemory)(target_ip, host->h_addr_list[0], 4);
+            struct sockaddr_in *addr = (struct sockaddr_in *)result->ai_addr;
+            API(RtlCopyMemory)(target_ip, &addr->sin_addr, 4);
 
+            API(freeaddrinfo)(result); // Free the result after use
             mcfree(domain_name); // Free domain name after use
+
             API(RtlCopyMemory)(&target_port, data + 5 + domain_len, 2);  // Port is after domain name (already in network byte order)
 
 
@@ -110,7 +122,9 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
         goto exit;
     }
 
+    // Success response
     API(RtlMoveMemory)(ret, "\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00", 10);
+    ret_val = TRUE;
 
     exit:
     ;
@@ -121,7 +135,7 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
     *data_out     = ret;
     *data_out_len = 10;
     
-    return FALSE;
+    return ret_val;
 }
 
 // Initialize the SOCKS context
@@ -160,7 +174,9 @@ BOOL socks_remove(PGS_SOCKS_CONTEXT ctx, UINT32 server_id) {
             }
 
             _inf("Removing connection with Server ID: %u", server_id);
+            API(closesocket)(current->socket);
             mcfree(current);
+
             ctx->connection_count--; // Decrement connection count
 
             return TRUE;
@@ -339,15 +355,19 @@ BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT3
     }else{ // Connection exists - forward data to target socket
 
         if (data_len > 0) {
-            INT sent = API(send)(conn->socket, (const PCHAR)data, data_len, 0);
-            if (sent == SOCKET_ERROR) {
-                _err("Failed to send data to socket: %d", API(WSAGetLastError)());
-
-                // Connection broken, remove and notify
-                socks_remove(ctx, server_id);
-                return FALSE;
-            } 
-            _inf("Forwarded %d bytes to target socket", sent);
+            UINT32 total_sent = 0;
+            while(total_sent < data_len) {
+                INT sent = API(send)(conn->socket, (PCHAR)(data + total_sent), data_len - total_sent, 0);
+                if (sent == SOCKET_ERROR) {
+                    int err = API(WSAGetLastError)();
+                    if (err != WSAEWOULDBLOCK) {
+                        _err("Send failed: %d", err);
+                        socks_remove(ctx, server_id); // Remove connection on send failure
+                        return FALSE;
+                    }
+                }
+                total_sent += sent;
+            }
         }
     }
 
