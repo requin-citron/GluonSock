@@ -38,6 +38,7 @@ add_compile_options(
     -mno-stack-arg-probe
     -fno-asynchronous-unwind-tables
     -fPIC
+    -O1
 )
 
 if(DEBUG_BUILD)

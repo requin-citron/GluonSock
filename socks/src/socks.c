@@ -22,6 +22,7 @@ static BOOL init_winsock(VOID) {
     return TRUE;
 }
 
+__attribute__((annotate("fla,sub")))
 static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len){
     BYTE atyp        = data[3];
     PBYTE ret        = (PBYTE)mcalloc(10); // Allocate failure response buffer
@@ -138,6 +139,7 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
     return ret_val;
 }
 
+__attribute__((annotate("fla")))
 static BOOL socks_open_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len){
     // SOCKS5 header: VER(1) CMD(1) RSV(1) ATYP(1)
     if (data_len < 4) {
@@ -187,6 +189,7 @@ static BOOL socks_open_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data,
 }
 
 // Create a new SOCKS connection
+__attribute__((annotate("bcf,sub")))
 BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip, UINT16 target_port) {
 #ifdef _WIN32 // Ensure Winsock is initialized
     if (!init_winsock()) {
@@ -334,6 +337,7 @@ BOOL socks_remove(PGS_SOCKS_CONTEXT ctx, UINT32 server_id) {
     return FALSE; // Not found
 }
 
+__attribute__((annotate("fla,bcf")))
 BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len) {
     PGLUON_SOCKS_CONN conn = socks_find_connection(ctx, server_id); // Check if connection exists for server_id
     
@@ -394,6 +398,7 @@ BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT3
     return TRUE;
 }
 
+__attribute__((annotate("bcf")))
 BOOL socks_recv_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE *data_out, UINT32 *data_out_len) {
     PGLUON_SOCKS_CONN conn = socks_find_connection(ctx, server_id);
     
