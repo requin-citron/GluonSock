@@ -92,6 +92,7 @@ add_library(socks STATIC ${SOCKS_SOURCES})
 target_include_directories(socks PUBLIC
     ${PROJECT_ROOT}/include
     ${PROJECT_ROOT}/socks/include
+    ${PROJECT_ROOT}/include/gluonsock
 )
 
 # =============================================================================

@@ -44,6 +44,8 @@ add_compile_definitions(
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${SOCKS_INCLUDE}
+    ${PROJECT_ROOT}/include
+    ${PROJECT_ROOT}/include/gluonsock
 )
 
 # =============================================================================
