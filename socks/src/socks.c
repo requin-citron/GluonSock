@@ -369,6 +369,8 @@ BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT3
         return FALSE;
 
     }else{ // Connection exists - forward data to target socket
+        *data_out     = NULL; // No response data for forwarding
+        *data_out_len = 0;
 
         if (data_len > 0) {
             UINT32 total_sent = 0;
