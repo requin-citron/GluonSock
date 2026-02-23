@@ -1,6 +1,6 @@
 #pragma once
-#ifndef CMD_SOCKS_H
-#define CMD_SOCKS_H
+#ifndef GLUONSOCK_H
+#define GLUONSOCK_H
 
 #include <winsock2.h>
 #include <windows.h>
