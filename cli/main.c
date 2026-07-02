@@ -8,6 +8,7 @@
 #define BUFFER_SIZE 4096
 
 static PGS_SOCKS_CONTEXT g_context = NULL;
+static CRITICAL_SECTION g_cs;
 
 static VOID on_connect(UINT32 server_id, BOOL success) {
     BYTE response[10] = {0x05, success ? 0x00 : 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -21,13 +22,14 @@ static DWORD WINAPI client_thread(LPVOID param) {
     BYTE buffer[BUFFER_SIZE];
 
     while (TRUE) {
+        EnterCriticalSection(&g_cs);
         socks_check_pending(g_context, on_connect);
-
         PGLUON_SOCKS_CONN conn = socks_find_connection(g_context, server_id);
         SOCKET remote_sock = INVALID_SOCKET;
         if (conn && conn->state == GS_CONN_CONNECTED) {
             remote_sock = conn->socket;
         }
+        LeaveCriticalSection(&g_cs);
 
         fd_set read_fds;
         FD_ZERO(&read_fds);
@@ -61,7 +63,10 @@ static DWORD WINAPI client_thread(LPVOID param) {
 
             PBYTE response      = NULL;
             UINT32 response_len = 0;
+
+            EnterCriticalSection(&g_cs);
             BOOL ret = socks_parse_data(g_context, server_id, buffer, recv_len, &response, &response_len);
+            LeaveCriticalSection(&g_cs);
 
             if (response && response_len > 0) {
                 send(client_sock, (char*)response, response_len, 0);
@@ -75,7 +80,11 @@ static DWORD WINAPI client_thread(LPVOID param) {
             PBYTE data_out      = NULL;
             UINT32 data_out_len = 0;
 
-            if (!socks_recv_data(g_context, server_id, &data_out, &data_out_len)) {
+            EnterCriticalSection(&g_cs);
+            BOOL recv_ok = socks_recv_data(g_context, server_id, &data_out, &data_out_len);
+            LeaveCriticalSection(&g_cs);
+
+            if (!recv_ok) {
                 _inf("Remote closed (Server ID: %u)", server_id);
                 break;
             }
@@ -88,7 +97,9 @@ static DWORD WINAPI client_thread(LPVOID param) {
         }
     }
 
+    EnterCriticalSection(&g_cs);
     socks_remove(g_context, server_id);
+    LeaveCriticalSection(&g_cs);
     closesocket(client_sock);
     _inf("Client thread exiting (Server ID: %u)", server_id);
     return 0;
@@ -98,6 +109,7 @@ INT main(INT argc, PCHAR* argv) {
     _inf("GluonSock CLI started");
 
     g_context = socks_init();
+    InitializeCriticalSection(&g_cs);
 
     WSADATA wsa_data;
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
