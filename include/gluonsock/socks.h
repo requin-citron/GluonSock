@@ -7,13 +7,19 @@
 #include <ws2tcpip.h>
 
 #define GS_SOCKS_BUFFER_SIZE        524288   // 512KB
-#define GS_SOCKS_CONNECT_TIMEOUT    5        // Seconds
+#define GS_SOCKS_CONNECT_TIMEOUT    10       // Seconds
 #define GS_SOCKS_MAX_CONNECTIONS    100      // Max concurrent
+
+#define GS_CONN_PENDING    0
+#define GS_CONN_CONNECTED  1
+
+typedef VOID (*GS_CONN_CALLBACK)(UINT32 server_id, BOOL success);
 
 typedef struct _GLUON_SOCKS_CONN {
     UINT32  server_id;
     SOCKET  socket;
-    BOOL    connected;
+    BYTE    state;
+    UINT32  connect_time;
     struct _GLUON_SOCKS_CONN* next;
 } GLUON_SOCKS_CONN, *PGLUON_SOCKS_CONN;
 
@@ -33,6 +39,7 @@ BOOL socks_parse_data(PGS_SOCKS_CONTEXT, UINT32, PBYTE, UINT32, PBYTE*, UINT32*)
 BOOL socks_parse_data_adaptix(PGS_SOCKS_CONTEXT, UINT32, PBYTE, UINT32, PBYTE *, UINT32 *);
 BOOL socks_create_conn(PGS_SOCKS_CONTEXT, UINT32, PCHAR, UINT16);
 BOOL socks_recv_data(PGS_SOCKS_CONTEXT, UINT32, PBYTE *, UINT32 *);
+VOID socks_check_pending(PGS_SOCKS_CONTEXT, GS_CONN_CALLBACK);
 
 #ifdef __cplusplus
 }

