@@ -1,6 +1,7 @@
 #include "socks.h"
 #include "debug.h"
 #include "utils.h"
+#include "netutils.h"
 
 // Initialize Winsock if not already done
 static BOOL winsock_initialized = FALSE;
@@ -56,6 +57,7 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
 
                 goto exit;
             }
+           
             BYTE domain_len = data[4];
             // len check for domain length + 2 bytes port
             if (data_len < (SIZE_T)(5 + domain_len + 2)) {
@@ -70,30 +72,19 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
             API(RtlCopyMemory)(domain_name, &data[5], domain_len);
             domain_name[domain_len] = '\0';
 
-            struct addrinfo hints, *result = NULL;
-            API(RtlZeroMemory)(&hints, sizeof(hints));
             
-            hints.ai_family   = AF_INET; // IPv4 only for now
-            hints.ai_socktype = SOCK_STREAM;
-
-            INT res = API(getaddrinfo)(domain_name, NULL, &hints, &result);
             
-            if (res != 0 || result == NULL) {
+            if (resolve_domain_name(domain_name, target_ip, NULL) == FALSE) {
                 // Host resolution failed
                 _err("SOCKS failed to resolve domain: %s", domain_name);
                 
                 // general failure response
                 API(RtlMoveMemory)(ret, "\x05\x01\x00\x01\x00\x00\x00\x00\x00\x00", 10);
                 mcfree(domain_name);
-                if (result) API(freeaddrinfo)(result);
                 
                 goto exit;
             }
 
-            struct sockaddr_in *addr = (struct sockaddr_in *)result->ai_addr;
-            API(RtlCopyMemory)(target_ip, &addr->sin_addr, 4);
-
-            API(freeaddrinfo)(result); // Free the result after use
             mcfree(domain_name); // Free domain name after use
 
             API(RtlCopyMemory)(&target_port, data + 5 + domain_len, 2);  // Port is after domain name (already in network byte order)
@@ -188,7 +179,32 @@ static BOOL socks_open_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data,
     return TRUE;
 }
 
+
+__attribute__((annotate("fla,sub")))
+static BOOL socks_forward_data(PGLUON_SOCKS_CONN conn, PBYTE data, UINT32 data_len) {
+    if (data_len > 0) {
+            UINT32 total_sent = 0;
+            while(total_sent < data_len) { // Keep sending until all data is sent
+                INT sent = API(send)(conn->socket, (PCHAR)(data + total_sent), data_len - total_sent, 0);
+                if (sent == SOCKET_ERROR) { // Handle send error
+                    int err = API(WSAGetLastError)();
+                    if (err != WSAEWOULDBLOCK) { // If it's not a would-block error, log and remove connection
+                        _err("Send failed: %d", err);
+                        return FALSE;
+                    }
+                    // it's a would-block error, wait and retry
+                    API(Sleep)(100); // Wait before retrying if socket is not ready
+                }else{
+                    total_sent += sent;
+                }
+            }
+    }
+
+    return TRUE;
+}
+
 // Create a new SOCKS connection
+// Target_ip cannot be null terminated since juste raw 4 byte copy is make
 __attribute__((annotate("bcf,sub")))
 BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip, UINT16 target_port) {
 #ifdef _WIN32 // Ensure Winsock is initialized
@@ -352,8 +368,7 @@ BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT3
         if (data[0] == 0x05 && data_len >= 2) {
             // If packet is short (< 6 bytes), it's a greeting
             // Otherwise it's a OPEN request
-            if (data_len < 6) {
-                // This is the initial greeting
+            if (data_len < 6) { // This is the initial greeting
                 // We don't require authentication, send: VER(0x05) METHOD(0x00 - no auth)
                 PBYTE ret = (PBYTE)mcalloc(2);
                 API(RtlMoveMemory)(ret, "\x05\x00", 2);
@@ -363,8 +378,7 @@ BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT3
                 *data_out_len = 2;
 
                 return TRUE;
-            } else {
-                // This is a CONNECT/BIND/UDP request
+            } else { // This is a CONNECT/BIND/UDP request
                 return socks_open_conn(ctx, server_id, data, data_len, data_out, data_out_len);
             }
         }
@@ -376,22 +390,10 @@ BOOL socks_parse_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT3
         *data_out     = NULL; // No response data for forwarding
         *data_out_len = 0;
 
-        if (data_len > 0) {
-            UINT32 total_sent = 0;
-            while(total_sent < data_len) {
-                INT sent = API(send)(conn->socket, (PCHAR)(data + total_sent), data_len - total_sent, 0);
-                if (sent == SOCKET_ERROR) {
-                    int err = API(WSAGetLastError)();
-                    if (err != WSAEWOULDBLOCK) {
-                        _err("Send failed: %d", err);
-                        socks_remove(ctx, server_id); // Remove connection on send failure
-                        return FALSE;
-                    }
-                    API(Sleep)(100); // Wait before retrying if socket is not ready
-                }else{
-                    total_sent += sent;
-                }
-            }
+        if(!socks_forward_data(conn, data, data_len)) {
+            _err("Failed to forward data for Server ID: %u", server_id);
+            socks_remove(ctx, server_id); // Remove connection on send failure
+            return FALSE;
         }
     }
 
@@ -450,4 +452,52 @@ BOOL socks_recv_data(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE *data_out, U
 
     mcfree(buffer);
     return TRUE;
+}
+
+
+__attribute__((annotate("fla,bcf")))
+BOOL socks_parse_data_adaptix(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, UINT32 data_len, PBYTE *data_out, UINT32 *data_out_len) {
+    PGLUON_SOCKS_CONN conn = socks_find_connection(ctx, server_id); // Check if connection exists for server_id
+
+    if(conn == NULL){ // connection does not exist, parse adaptix format [atyp(1)][address_string(N)][port(2 BE)]
+        if(data_len < 4) { // Minimum length check: 1 byte for ATYP, 1 byte for address, 2 bytes for port
+            _err("Adaptix request too short");
+            return FALSE;
+        }
+
+        UINT32 addr_len = data_len - 3; // Remaining bytes after ATYP and port
+        PCHAR addr_str  = (PCHAR)mcalloc(addr_len + 1);
+        
+        API(RtlCopyMemory)(addr_str, &data[1], addr_len);
+        addr_str[addr_len] = '\0'; // Null-terminate the address string
+
+        UINT16 target_port;
+        API(RtlCopyMemory)(&target_port, &data[data_len - 2], 2); // Last 2 bytes are the port (already in network byte order)
+
+        CHAR target_ip[4]; // IPv4 address is 4 bytes
+        
+        if(!resolve_domain_name(addr_str, target_ip, NULL)) { // Resolve domain to IP
+            _err("Failed to resolve domain name: %s", addr_str);
+            mcfree(addr_str); // Free the allocated address string
+            
+            return FALSE;
+        }
+        mcfree(addr_str); // Free the allocated address string
+
+        return socks_create_conn(ctx, server_id, target_ip, target_port);
+
+    }else{ // connection exists, forward data to target socket
+        *data_out     = NULL; // No response data for forwarding
+        *data_out_len = 0;
+
+        if(!socks_forward_data(conn, data, data_len)) {
+            _err("Failed to forward data for Server ID: %u", server_id);
+            socks_remove(ctx, server_id); // Remove connection on send failure
+            return FALSE;
+        }
+
+    }
+
+    return TRUE;
+
 }
