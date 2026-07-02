@@ -20,7 +20,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Paths
 # =============================================================================
 set(PROJECT_ROOT ${CMAKE_SOURCE_DIR}/..)
-set(SOCKS_INCLUDE ${PROJECT_ROOT}/socks/include)
+set(SOCKS_INCLUDE ${PROJECT_ROOT}/socks/include ${PROJECT_ROOT}/include)
 set(SOCKS_SOURCE ${PROJECT_ROOT}/socks/src)
 
 # =============================================================================
