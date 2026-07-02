@@ -40,6 +40,7 @@ FAKE_VALUE_FUNC(u_short, ntohs, u_short);
 // Include source file AFTER all redirections (as C, not C++)
 // ============================================================
 extern "C" {
+#include "../../socks/src/netutils.c"
 #include "../../socks/src/socks.c"
 }
 
@@ -930,4 +931,291 @@ TEST_F(SocksTest, RecvData_SocketError) {
 
     EXPECT_FALSE(result);
     EXPECT_EQ(ctx->connection_count, 0u); // Connection removed
+}
+
+// ============================================================
+// resolve_domain_name Tests
+// ============================================================
+
+TEST_F(SocksTest, ResolveDomainName_Success) {
+    CHAR ip_addr[4];
+    SIZE_T ip_len = 0;
+
+    BOOL result = resolve_domain_name("example.com", ip_addr, &ip_len);
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(ip_len, 4u);
+    EXPECT_EQ(getaddrinfo_fake.call_count, 1u);
+    EXPECT_EQ(freeaddrinfo_fake.call_count, 1u);
+    // getaddrinfo_success returns 127.0.0.1 (0x0100007F)
+    EXPECT_EQ((UINT8)ip_addr[0], 127u);
+    EXPECT_EQ((UINT8)ip_addr[1], 0u);
+    EXPECT_EQ((UINT8)ip_addr[2], 0u);
+    EXPECT_EQ((UINT8)ip_addr[3], 1u);
+}
+
+TEST_F(SocksTest, ResolveDomainName_NullLen) {
+    CHAR ip_addr[4];
+
+    BOOL result = resolve_domain_name("example.com", ip_addr, NULL);
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(getaddrinfo_fake.call_count, 1u);
+}
+
+TEST_F(SocksTest, ResolveDomainName_Failure) {
+    getaddrinfo_fake.custom_fake = getaddrinfo_failure;
+
+    CHAR ip_addr[4];
+    SIZE_T ip_len = 0;
+
+    BOOL result = resolve_domain_name("bad.host", ip_addr, &ip_len);
+
+    EXPECT_FALSE(result);
+    EXPECT_EQ(ip_len, 0u);
+    EXPECT_EQ(getaddrinfo_fake.call_count, 1u);
+}
+
+TEST_F(SocksTest, ResolveDomainName_IPv4String) {
+    CHAR ip_addr[4];
+
+    BOOL result = resolve_domain_name("10.0.0.1", ip_addr, NULL);
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(getaddrinfo_fake.call_count, 1u);
+}
+
+// ============================================================
+// socks_forward_data Tests
+// ============================================================
+
+TEST_F(SocksTest, ForwardData_Success) {
+    PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
+    test_conn->server_id = 50;
+    test_conn->socket = 123;
+    test_conn->connected = TRUE;
+    test_conn->next = NULL;
+
+    ctx->connections = test_conn;
+    ctx->connection_count = 1;
+
+    send_fake.return_val = 5;
+
+    BYTE data[] = {'H', 'e', 'l', 'l', 'o'};
+    BOOL result = socks_forward_data(test_conn, data, sizeof(data));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(send_fake.call_count, 1u);
+    EXPECT_EQ(send_fake.arg0_val, 123);
+}
+
+TEST_F(SocksTest, ForwardData_EmptyData) {
+    PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
+    test_conn->server_id = 51;
+    test_conn->socket = 123;
+    test_conn->connected = TRUE;
+    test_conn->next = NULL;
+
+    ctx->connections = test_conn;
+    ctx->connection_count = 1;
+
+    BOOL result = socks_forward_data(test_conn, NULL, 0);
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(send_fake.call_count, 0u);
+}
+
+TEST_F(SocksTest, ForwardData_WouldBlockThenSuccess) {
+    PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
+    test_conn->server_id = 52;
+    test_conn->socket = 123;
+    test_conn->connected = TRUE;
+    test_conn->next = NULL;
+
+    ctx->connections = test_conn;
+    ctx->connection_count = 1;
+
+    send_fake.return_val_seq = (INT[]){SOCKET_ERROR, 4};
+    send_fake.return_val_seq_len = 2;
+    WSAGetLastError_fake.custom_fake = WSAGetLastError_would_block;
+
+    BYTE data[] = {'T', 'e', 's', 't'};
+    BOOL result = socks_forward_data(test_conn, data, sizeof(data));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(send_fake.call_count, 2u);
+}
+
+TEST_F(SocksTest, ForwardData_SendFails) {
+    PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
+    test_conn->server_id = 53;
+    test_conn->socket = 123;
+    test_conn->connected = TRUE;
+    test_conn->next = NULL;
+
+    ctx->connections = test_conn;
+    ctx->connection_count = 1;
+
+    send_fake.return_val = SOCKET_ERROR;
+    WSAGetLastError_fake.return_val = WSAECONNRESET;
+
+    BYTE data[] = {'F', 'a', 'i', 'l'};
+    BOOL result = socks_forward_data(test_conn, data, sizeof(data));
+
+    EXPECT_FALSE(result);
+}
+
+TEST_F(SocksTest, ForwardData_PartialSend) {
+    PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
+    test_conn->server_id = 54;
+    test_conn->socket = 123;
+    test_conn->connected = TRUE;
+    test_conn->next = NULL;
+
+    ctx->connections = test_conn;
+    ctx->connection_count = 1;
+
+    send_fake.return_val_seq = (INT[]){3, 2};
+    send_fake.return_val_seq_len = 2;
+
+    BYTE data[] = {'H', 'e', 'l', 'l', 'o'};
+    BOOL result = socks_forward_data(test_conn, data, sizeof(data));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(send_fake.call_count, 2u);
+}
+
+// ============================================================
+// socks_parse_data_adaptix Tests
+// ============================================================
+
+TEST_F(SocksTest, Adaptix_ConnectIPv4) {
+    // Adaptix format: [atyp=0x01]["10.0.0.1"][port=0x01BB (443 BE)]
+    BYTE data[] = {
+        0x01,
+        '1', '0', '.', '0', '.', '0', '.', '1',
+        0x01, 0xBB
+    };
+    PBYTE response = NULL;
+    UINT32 response_len = 0;
+
+    BOOL result = socks_parse_data_adaptix(ctx, 1, data, sizeof(data), &response, &response_len);
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(ctx->connection_count, 1u);
+    EXPECT_EQ(getaddrinfo_fake.call_count, 1u);
+
+    PGLUON_SOCKS_CONN conn = socks_find_connection(ctx, 1);
+    ASSERT_NE(conn, nullptr);
+    EXPECT_EQ(conn->server_id, 1u);
+}
+
+TEST_F(SocksTest, Adaptix_ConnectDomain) {
+    // Adaptix format: [atyp=0x03]["test.com"][port=0x0050 (80 BE)]
+    BYTE data[] = {
+        0x03,
+        't', 'e', 's', 't', '.', 'c', 'o', 'm',
+        0x00, 0x50
+    };
+    PBYTE response = NULL;
+    UINT32 response_len = 0;
+
+    BOOL result = socks_parse_data_adaptix(ctx, 2, data, sizeof(data), &response, &response_len);
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(ctx->connection_count, 1u);
+    EXPECT_EQ(getaddrinfo_fake.call_count, 1u);
+}
+
+TEST_F(SocksTest, Adaptix_TooShort) {
+    BYTE data[] = {0x01, 'a'};
+    PBYTE response = NULL;
+    UINT32 response_len = 0;
+
+    BOOL result = socks_parse_data_adaptix(ctx, 3, data, sizeof(data), &response, &response_len);
+
+    EXPECT_FALSE(result);
+    EXPECT_EQ(ctx->connection_count, 0u);
+}
+
+TEST_F(SocksTest, Adaptix_ResolveFails) {
+    getaddrinfo_fake.custom_fake = getaddrinfo_failure;
+
+    BYTE data[] = {
+        0x03,
+        'b', 'a', 'd',
+        0x00, 0x50
+    };
+    PBYTE response = NULL;
+    UINT32 response_len = 0;
+
+    BOOL result = socks_parse_data_adaptix(ctx, 4, data, sizeof(data), &response, &response_len);
+
+    EXPECT_FALSE(result);
+    EXPECT_EQ(ctx->connection_count, 0u);
+}
+
+TEST_F(SocksTest, Adaptix_ForwardExistingConnection) {
+    PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
+    test_conn->server_id = 10;
+    test_conn->socket = 123;
+    test_conn->connected = TRUE;
+    test_conn->next = NULL;
+
+    ctx->connections = test_conn;
+    ctx->connection_count = 1;
+
+    send_fake.return_val = 5;
+
+    BYTE data[] = {'H', 'e', 'l', 'l', 'o'};
+    PBYTE response = NULL;
+    UINT32 response_len = 0;
+
+    BOOL result = socks_parse_data_adaptix(ctx, 10, data, sizeof(data), &response, &response_len);
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(response, nullptr);
+    EXPECT_EQ(response_len, 0u);
+    EXPECT_EQ(send_fake.call_count, 1u);
+}
+
+TEST_F(SocksTest, Adaptix_ForwardFails_RemovesConnection) {
+    PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
+    test_conn->server_id = 11;
+    test_conn->socket = 123;
+    test_conn->connected = TRUE;
+    test_conn->next = NULL;
+
+    ctx->connections = test_conn;
+    ctx->connection_count = 1;
+
+    send_fake.return_val = SOCKET_ERROR;
+    WSAGetLastError_fake.return_val = WSAECONNRESET;
+
+    BYTE data[] = {'F', 'a', 'i', 'l'};
+    PBYTE response = NULL;
+    UINT32 response_len = 0;
+
+    BOOL result = socks_parse_data_adaptix(ctx, 11, data, sizeof(data), &response, &response_len);
+
+    EXPECT_FALSE(result);
+    EXPECT_EQ(ctx->connection_count, 0u);
+}
+
+TEST_F(SocksTest, Adaptix_ConnectSocketCreationFails) {
+    WSASocketA_fake.custom_fake = nullptr;
+    WSASocketA_fake.return_val = INVALID_SOCKET;
+
+    BYTE data[] = {
+        0x01,
+        '1', '0', '.', '0', '.', '0', '.', '1',
+        0x01, 0xBB
+    };
+    PBYTE response = NULL;
+    UINT32 response_len = 0;
+
+    BOOL result = socks_parse_data_adaptix(ctx, 5, data, sizeof(data), &response, &response_len);
+
+    EXPECT_FALSE(result);
+    EXPECT_EQ(ctx->connection_count, 0u);
 }

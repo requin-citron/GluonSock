@@ -5,6 +5,8 @@
 BOOL resolve_domain_name(const PCHAR domain_name, PCHAR ip_addr, PSIZE_T ip_addr_len) {
     BOOL ret_val = FALSE;
     struct addrinfo hints, *result = NULL;
+    struct sockaddr_in *addr       = NULL;
+    
     API(RtlZeroMemory)(&hints, sizeof(hints)); // Zero out the hints structure
     
     hints.ai_family   = AF_INET; // IPv4 only for now
@@ -16,7 +18,7 @@ BOOL resolve_domain_name(const PCHAR domain_name, PCHAR ip_addr, PSIZE_T ip_addr
         goto exit;
     }
 
-    struct sockaddr_in *addr = (struct sockaddr_in *)result->ai_addr;
+    addr = (struct sockaddr_in *)result->ai_addr;
     
     API(RtlCopyMemory)(ip_addr, &addr->sin_addr, 4); // 4 is the size of an IPv4 addr
     
@@ -28,6 +30,8 @@ BOOL resolve_domain_name(const PCHAR domain_name, PCHAR ip_addr, PSIZE_T ip_addr
 
 
     exit:
+    ;
+
     if (result) API(freeaddrinfo)(result); // Free the result after use
 
     return ret_val;
