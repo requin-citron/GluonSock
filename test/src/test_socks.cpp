@@ -212,7 +212,7 @@ TEST_F(SocksTest, FindConnection_Found) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 42;
     test_conn->socket = 100;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -230,17 +230,17 @@ TEST_F(SocksTest, FindConnection_MultipleConnections) {
     PGLUON_SOCKS_CONN conn1 = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     conn1->server_id = 1;
     conn1->socket = 100;
-    conn1->connected = TRUE;
+    conn1->state = GS_CONN_CONNECTED;
 
     PGLUON_SOCKS_CONN conn2 = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     conn2->server_id = 2;
     conn2->socket = 200;
-    conn2->connected = TRUE;
+    conn2->state = GS_CONN_CONNECTED;
 
     PGLUON_SOCKS_CONN conn3 = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     conn3->server_id = 3;
     conn3->socket = 300;
-    conn3->connected = TRUE;
+    conn3->state = GS_CONN_CONNECTED;
 
     conn1->next = conn2;
     conn2->next = conn3;
@@ -266,7 +266,7 @@ TEST_F(SocksTest, RemoveConnection_Success) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 42;
     test_conn->socket = 100;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -285,17 +285,17 @@ TEST_F(SocksTest, RemoveConnection_Middle) {
     PGLUON_SOCKS_CONN conn1 = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     conn1->server_id = 1;
     conn1->socket = 100;
-    conn1->connected = TRUE;
+    conn1->state = GS_CONN_CONNECTED;
 
     PGLUON_SOCKS_CONN conn2 = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     conn2->server_id = 2;
     conn2->socket = 200;
-    conn2->connected = TRUE;
+    conn2->state = GS_CONN_CONNECTED;
 
     PGLUON_SOCKS_CONN conn3 = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     conn3->server_id = 3;
     conn3->socket = 300;
-    conn3->connected = TRUE;
+    conn3->state = GS_CONN_CONNECTED;
 
     conn1->next = conn2;
     conn2->next = conn3;
@@ -318,7 +318,7 @@ TEST_F(SocksTest, RemoveConnection_DecrementCount) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 1;
     test_conn->socket = 100;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -334,7 +334,7 @@ TEST_F(SocksTest, RemoveConnection_ClosesSocket) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 1;
     test_conn->socket = 123;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -415,7 +415,7 @@ TEST_F(SocksTest, DataCommand_SOCKS5ConnectIPv4) {
     PGLUON_SOCKS_CONN conn = socks_find_connection(ctx, 1);
     ASSERT_NE(conn, nullptr);
     EXPECT_EQ(conn->server_id, 1u);
-    EXPECT_TRUE(conn->connected);
+    EXPECT_EQ(conn->state, GS_CONN_CONNECTED);
 
     mcfree(response);
 }
@@ -478,7 +478,7 @@ TEST_F(SocksTest, Connect_IPv4ConnectSuccess) {
     ASSERT_NE(conn, nullptr);
     EXPECT_EQ(conn->server_id, 2u);
     EXPECT_EQ(conn->socket, 123);
-    EXPECT_TRUE(conn->connected);
+    EXPECT_EQ(conn->state, GS_CONN_CONNECTED);
 
     mcfree(response);
 }
@@ -712,7 +712,7 @@ TEST_F(SocksTest, DataCommand_ForwardDataToExistingConnection) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 10;
     test_conn->socket = 123;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -739,7 +739,7 @@ TEST_F(SocksTest, ParseData_SendWouldBlock) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 11;
     test_conn->socket = 123;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -766,7 +766,7 @@ TEST_F(SocksTest, ParseData_SendFails) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 12;
     test_conn->socket = 123;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -803,7 +803,7 @@ TEST_F(SocksTest, CreateConnection_Success) {
     PGLUON_SOCKS_CONN conn = socks_find_connection(ctx, 20);
     ASSERT_NE(conn, nullptr);
     EXPECT_EQ(conn->server_id, 20u);
-    EXPECT_TRUE(conn->connected);
+    EXPECT_EQ(conn->state, GS_CONN_CONNECTED);
 
     EXPECT_EQ(WSASocketA_fake.call_count, 1u);
     EXPECT_EQ(ioctlsocket_fake.call_count, 1u);
@@ -813,8 +813,6 @@ TEST_F(SocksTest, CreateConnection_Success) {
 TEST_F(SocksTest, CreateConnection_WouldBlock) {
     connect_fake.custom_fake = connect_would_block;
     WSAGetLastError_fake.custom_fake = WSAGetLastError_would_block;
-    select_fake.custom_fake = select_ready;
-    getsockopt_fake.custom_fake = getsockopt_success;
 
     CHAR ip[] = {0x0A, 0x00, 0x00, 0x01}; // 10.0.0.1
     UINT16 port = 0x01BB; // 443
@@ -822,8 +820,11 @@ TEST_F(SocksTest, CreateConnection_WouldBlock) {
     BOOL result = socks_create_conn(ctx, 21, ip, port);
 
     EXPECT_TRUE(result);
-    EXPECT_EQ(select_fake.call_count, 1u);
-    EXPECT_EQ(getsockopt_fake.call_count, 1u);
+    EXPECT_EQ(ctx->connection_count, 1u);
+
+    PGLUON_SOCKS_CONN conn = socks_find_connection(ctx, 21);
+    ASSERT_NE(conn, nullptr);
+    EXPECT_EQ(conn->state, GS_CONN_PENDING);
 }
 
 // ============================================================
@@ -835,7 +836,7 @@ TEST_F(SocksTest, RecvData_Success) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 30;
     test_conn->socket = 456;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -867,7 +868,7 @@ TEST_F(SocksTest, RecvData_ConnectionClosed) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 31;
     test_conn->socket = 456;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -890,7 +891,7 @@ TEST_F(SocksTest, RecvData_WouldBlock) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 32;
     test_conn->socket = 456;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -914,7 +915,7 @@ TEST_F(SocksTest, RecvData_SocketError) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 33;
     test_conn->socket = 456;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -993,7 +994,7 @@ TEST_F(SocksTest, ForwardData_Success) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 50;
     test_conn->socket = 123;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -1013,7 +1014,7 @@ TEST_F(SocksTest, ForwardData_EmptyData) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 51;
     test_conn->socket = 123;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -1029,7 +1030,7 @@ TEST_F(SocksTest, ForwardData_WouldBlockThenSuccess) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 52;
     test_conn->socket = 123;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -1050,7 +1051,7 @@ TEST_F(SocksTest, ForwardData_SendFails) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 53;
     test_conn->socket = 123;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -1069,7 +1070,7 @@ TEST_F(SocksTest, ForwardData_PartialSend) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 54;
     test_conn->socket = 123;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -1159,7 +1160,7 @@ TEST_F(SocksTest, Adaptix_ForwardExistingConnection) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 10;
     test_conn->socket = 123;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;
@@ -1183,7 +1184,7 @@ TEST_F(SocksTest, Adaptix_ForwardFails_RemovesConnection) {
     PGLUON_SOCKS_CONN test_conn = (PGLUON_SOCKS_CONN)mcalloc(sizeof(GLUON_SOCKS_CONN));
     test_conn->server_id = 11;
     test_conn->socket = 123;
-    test_conn->connected = TRUE;
+    test_conn->state = GS_CONN_CONNECTED;
     test_conn->next = NULL;
 
     ctx->connections = test_conn;

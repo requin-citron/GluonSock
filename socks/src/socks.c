@@ -29,7 +29,8 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
     PBYTE ret        = (PBYTE)mcalloc(10); // Allocate failure response buffer
     BOOL ret_val     = TRUE; // Default to failure, set to TRUE on success
     UINT16 target_port;
-    CHAR  target_ip[4]; // IPv4 address is 4 bytes 
+    CHAR  target_ip[4]; // IPv4 address is 4 bytes
+    PGLUON_SOCKS_CONN conn = NULL;
     
     switch(atyp) {
         case 0x01: // IPv4
@@ -116,7 +117,7 @@ static BOOL socks_connect(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PBYTE data, U
     }
 
     // Check if connection is still pending (async)
-    PGLUON_SOCKS_CONN conn = socks_find_connection(ctx, server_id);
+    conn = socks_find_connection(ctx, server_id);
     if (conn && conn->state == GS_CONN_PENDING) {
         mcfree(ret);
         *data_out     = NULL;
