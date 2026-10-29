@@ -287,6 +287,14 @@ BOOL socks_create_conn(PGS_SOCKS_CONTEXT ctx, UINT32 server_id, PCHAR target_ip,
 
 // Initialize the SOCKS context
 PGS_SOCKS_CONTEXT socks_init() {
+#ifdef _WIN32                                                                                                  
+    if (!init_winsock()) {   
+        // WSAStartup must run before any getaddrinfo: DNS resolution happens                                                                                  
+        _err("Failed to initialize Winsock");                                                                  
+        return NULL;                                                                                           
+    }                                                                                                          
+#endif
+
     PGS_SOCKS_CONTEXT context = (PGS_SOCKS_CONTEXT)mcalloc(sizeof(GS_SOCKS_CONTEXT));
 
     // Initialize the CTX
